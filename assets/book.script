@@ -1,0 +1,17 @@
+local msg_trigger_response = hash("trigger_response")
+local group_player = hash("player")
+
+local function handle_player(self)
+	go.delete()
+end
+
+function on_message(self, message_id, message, sender)
+
+	if message_id == msg_trigger_response and sender.fragment == hash("hit") then
+		if message.enter then
+			if message.group == group_player then
+				handle_player(self)
+			end
+		end
+	end
+end

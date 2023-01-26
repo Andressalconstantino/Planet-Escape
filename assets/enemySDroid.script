@@ -1,0 +1,200 @@
+-- Player logic
+
+-- these are the tweaks for the mechanics, feel free to change them for a different feeling
+
+-- max speed right/left
+local max_speed = 50
+-- gravity pulling the player down in pixel units
+local gravity = -1000
+
+local move_accel = 100
+local ground_contact = false
+local wall_contact = false
+local player_contact = false
+
+
+
+
+-- pre-hashing ids improves performance
+local msg_contact_point_response = hash("contact_point_response")
+local msg_collision_response = hash("collision_response")
+local msg_trigger_response = hash("trigger_response")
+local group_obstacle = hash("ground")
+local group_invisible_wall = hash("invisible_walls")
+local group_player = hash("player")
+local anim_walk = hash("run")
+
+
+function init(self)
+	-- this lets us handle input in this script
+	msg.post(".", "acquire_input_focus")
+
+	-- activate camera attached to the player collection
+	-- this will send camera updates to the render script
+	-- msg.post("camera", "acquire_camera_focus")
+
+	-- initial player velocity
+	self.velocity = vmath.vector3(0, 0, 0)
+	-- support variable to keep track of collisions and separation
+	-- self.correction = vmath.vector3()
+	-- if the player stands on ground or not
+	-- self.ground_contact = false
+	-- the currently playing animation
+	self.anim = nil
+
+	self.movement = 1
+end
+
+local function play_animation(self, anim)
+	-- only play animations which are not already playing
+	if self.anim ~= anim then
+		--msg.post("enemyMud#sprite", "play_animation",{id=anim})
+		-- tell the sprite to play the animation
+		sprite.play_flipbook("#sprite", anim)
+		-- remember which animation is playing
+		self.anim = anim
+	end
+end
+
+local function checkFrame(self, anim, frame)
+	if self.anim == anim then
+		cursor = go.get("enemySDroid#sprite", "cursor")
+		if cursor > frame and cursor < frame + 0.1 then
+			msg.post("enemySDroid#hitbox", "enable")
+		else
+			msg.post("enemySDroid#hitbox", "disable")
+		end
+	end
+end
+
+local function update_animations(self)
+	-- make sure the player character faces the right way
+	sprite.set_hflip("#sprite", self.movement < 0)
+	if self.movement < 0 then
+		physics.set_hflip("#collisionSDroid", true)
+		physics.set_hflip("#hitbox", true)
+	else
+		physics.set_hflip("#collisionSDroid", false)
+		physics.set_hflip("#hitbox", false)
+	end
+	-- make sure the right animation is playing
+	play_animation(self, anim_walk)
+end
+
+function doMove(self, dt)
+	local target_speed = self.movement * max_speed
+	local speed_diff = target_speed - self.velocity.x
+
+	local accel = vmath.vector3(0, gravity, 0)
+
+	if (speed_diff ~= 0) then
+		if (speed_diff < 0) then
+			accel.x =- move_accel
+		else
+			accel.x = move_accel
+		end
+	end
+
+	local dv = accel * dt
+	if (math.abs(dv.x) > math.abs(speed_diff)) then
+		dv.x = speed_diff
+	end
+
+	local v0 = self.velocity
+	self.velocity = self.velocity + dv
+
+	local dp = (v0 + self.velocity) * dt
+
+	go.set_position(go.get_position() + dp)
+
+end
+
+function update(self, dt)
+	doMove(self, dt)
+
+	update_animations(self)
+
+	self.correction = vmath.vector3()
+
+	self.ground_contact = false
+	self.wall_contact = false
+	self.player_contact = false
+end
+
+-- https://defold.com/manuals/physics/#resolving-kinematic-collisions
+local function handle_obstacle_contact(self, normal, distance)
+	local proj = vmath.dot(self.correction, normal)
+	local comp = (distance - proj) * normal
+
+	self.correction = self.correction + comp
+
+	go.set_position(go.get_position() + comp)
+
+	if normal.y > 0.7 then
+		self.ground_contact = true
+	end
+
+	proj = vmath.dot(self.velocity, normal)
+	if proj < 0 then
+		self.velocity = self.velocity - proj * normal
+	end
+end
+
+local function handle_wall_contact(self, normal, distance)
+	local proj = vmath.dot(self.correction, normal)
+	local comp = (distance - proj) * normal
+
+	self.correction = self.correction + comp
+
+	go.set_position(go.get_position() + comp)
+
+	self.wall_contact = true
+	self.movement = normal.x
+
+
+	proj = vmath.dot(self.velocity, normal)
+	if proj < 0 then
+		self.velocity = self.velocity - proj * normal
+	end
+end
+
+local function handle_player_contact(self, normal, distance)
+	player_contact = true
+	print("PLAYER CONTACT")
+
+end
+
+local function handle_player_damage(self, normal, distance)
+	msg.post("/player/player#player","damage")
+
+end
+
+function on_message(self, message_id, message, sender)
+	-- check if we received a contact point message
+	if message_id == msg_contact_point_response then
+		-- check that the object is something we consider an obstacle
+		if message.group == group_obstacle then
+			handle_obstacle_contact(self, message.normal, message.distance)
+		elseif message.group == group_invisible_wall and not self.wall_contact then
+			handle_wall_contact(self, message.normal, message.distance)
+		end
+	end
+
+	if message_id == msg_collision_response then
+		if message.group == group_player and not self.player_contact then
+			handle_player_contact(self, message.normal, message.distance)
+		end
+	end
+
+	if message_id == msg_trigger_response and sender.fragment == hash("hitbox") then
+		if message.enter then
+			if message.group == group_player and self.player_contact then
+				handle_player_damage(self, message.normal, message.distance)
+			end	
+		end
+	end
+end
+
+
+-- local function death(self)
+
